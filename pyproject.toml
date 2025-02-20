@@ -1,0 +1,17 @@
+[project]
+name = "delulu-backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi==0.109.2",
+    "git-filter-repo>=2.47.0",
+    "google-cloud-storage==2.14.0",
+    "google-genai>=1.2.0",
+    "pillow==11.1.0",
+    "pydantic>=2.5.0,<3.0.0",
+    "python-dotenv==1.0.0",
+    "python-multipart==0.0.6",
+    "uvicorn==0.27.1",
+]

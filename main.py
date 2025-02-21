@@ -14,13 +14,11 @@ import io
 import uvicorn
 from google.cloud import storage
 import hashlib
-
+from google.oauth2 import service_account
 # Load environment variables
 load_dotenv()
 
 # Initialize client 
-# GEMINI_MODEL = 'gemini-flash-2.0' 
-# IMAGEN_MODEL = 'imagen-3.0-generate-002' 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL") 
 IMAGEN_MODEL = os.getenv("IMAGEN_MODEL") 
 FREE_MODE = os.getenv("FREE_MODE") == "true"
@@ -28,7 +26,12 @@ gemini = genai.Client(api_key=os.getenv("FREE_API_KEY" if FREE_MODE else "PAID_A
 imagen= genai.Client(api_key=os.getenv("FREE_API_KEY" if FREE_MODE else "PAID_API_KEY"))
 
 # Initialize Google Cloud Storage
-storage_client = storage.Client.from_service_account_json('service-account.json', project=os.getenv("GCS_PROJECT_ID"))
+
+# Create credentials object from environment variables
+credentials = service_account.Credentials.from_service_account_info(json.loads(os.getenv('GOOGLE_APPLICATION_CREDENTIALS')))
+
+# Initialize storage client with credentials
+storage_client = storage.Client(project=os.getenv("GCS_PROJECT_ID"), credentials=credentials)
 bucket = storage_client.bucket(os.getenv("GCS_BUCKET_NAME"))
 
 # Configure bucket for public access
@@ -80,7 +83,7 @@ class Storysetting(BaseModel):
     tone: str
     setting: str
     length: str
-    details: str
+    details: Optional[str] = None
 
 class StorySegment(BaseModel):
     characters: List[Character]
@@ -170,8 +173,8 @@ async def generate_character_details_generic(prompt_input: Union[str, bytes], is
         
         try:
             # Parse the response using Pydantic model
-            character_data = CharacterResponse.model_validate_json(response.text)
-            return {"response": character_data.model_dump()}
+            character_data: CharacterResponse =response.parsed
+            return {"response": character_data}
         except Exception:
             return {"response": None}
             
@@ -218,9 +221,7 @@ Last action: {segment.last_action if segment.last_action else 'Story start'}"""
 
         try:
             # Attempt to parse the response text as JSON first
-            json_data = json.loads(response.text)
-            # Then validate with Pydantic model
-            story_data = StoryResponse.model_validate(json_data)
+            story_data: StoryResponse = response.parsed 
         except json.JSONDecodeError as e:
             print(f"Error decoding JSON response: {str(e)}")
             return {"response": None}
@@ -263,7 +264,7 @@ Last action: {segment.last_action if segment.last_action else 'Story start'}"""
             
             story_data.setting_image_url = image_url
         
-        return {"response": story_data.model_dump()}
+        return {"response": story_data}
     except Exception as e:
         print(f"Error in generate_story_segment: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

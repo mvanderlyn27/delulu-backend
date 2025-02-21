@@ -3,13 +3,22 @@ from PIL import Image
 import os
 from dotenv import load_dotenv
 import io
+import json
+from google.oauth2 import service_account
 
 # Load environment variables
 load_dotenv()
 
-# Initialize Google Cloud Storage client
-storage_client = storage.Client.from_service_account_json('service-account.json', project=os.getenv("GCS_PROJECT_ID"))
-bucket = storage_client.bucket(os.getenv("GCS_BUCKET_NAME"))
+# Initialize Google Cloud Storage client with service account credentials
+
+# Create credentials object from environment variables
+credentials = service_account.Credentials.from_service_account_info(json.loads(os.getenv('GOOGLE_APPLICATION_CREDENTIALS')))
+
+# Initialize storage client with credentials
+storage_client = storage.Client(project=os.getenv("GCS_PROJECT_ID"), credentials=credentials)
+# Split bucket name and folder path
+bucket_name = os.getenv("GCS_BUCKET_NAME") # Get just 'delulu-mvp'
+bucket = storage_client.bucket(bucket_name)
 
 def create_test_image():
     # Create a simple test image (100x100 red square)
@@ -26,7 +35,8 @@ def test_storage_upload():
         
         # Create a test filename
         test_filename = 'test.png'
-        blob = bucket.blob(f"{os.getenv('GCS_FOLDER_NAME')}/{test_filename}")
+        folder_name = os.getenv('GCS_FOLDER_NAME') # Get 'story-photos'
+        blob = bucket.blob(f"{folder_name}/{test_filename}")
         
         # Upload the image
         blob.upload_from_string(

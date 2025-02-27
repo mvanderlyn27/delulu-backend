@@ -72,24 +72,25 @@ app.add_middleware(
 # Data models
 class Character(BaseModel):
     name: str
-    image_url: Optional[str] = None
     age: Optional[int] = None
-    personality_traits: Optional[List[str]] = None
-    role: Optional[str] = None
+    gender: Optional[str] = None
+    personality: Optional[List[str]] = None
+    occupation: Optional[str] = None
+    customElements: Optional[str] = None
 
-class Storysetting(BaseModel):
-    template: str
-    genre: str
-    tone: str
+class StoryConfig(BaseModel):
+    theme: str
+    focus: str
     setting: str
-    length: str
+    time_period: str
+    pov: str
+    trope: str
+    genre: str
     details: Optional[str] = None
+    length: int 
 
-class StorySegment(BaseModel):
-    characters: List[Character]
-    story_config: Storysetting
-    plot_summary: Optional[List[str]] = None
-    last_action: Optional[str] = None
+class StoryInput(BaseModel):
+    prompt: str
 
 class CharacterNameRequest(BaseModel):
     name: str
@@ -98,15 +99,32 @@ class CharacterResponse(BaseModel):
     name: str
     age: int
     personality: List[str]
-    role: str
+    occupation: str
     gender: str
+class StoryChoices(BaseModel):
+    text: str
+    impact: str 
+    tension_level: int
 
+class StoryImage(BaseModel):
+    url: str
+    description: str 
+class StoryState(BaseModel):
+    location: str
+    new_location: bool
+    location_description: str
+    active_plot_threads: List[str]
+    unresolved_elements: List[str]
+    story_phase: str
+    emotional_tone: str
+    current_tension: int
 class StoryResponse(BaseModel):
     text: str
-    setting_description: str
-    choices: List[str]
-    plot_points: List[str]
-    setting_image_url: Optional[str] = None
+    choices: List[StoryChoices]
+    current_tension: int
+    story_state: StoryState
+    story_images: List[StoryImage]
+    story_over: bool
 
 def validate_image(image_bytes):
     try:
@@ -149,7 +167,17 @@ def save_image_to_cache(prompt: str, image_bytes: bytes) -> str:
 
 async def generate_character_details_generic(prompt_input: Union[str, bytes], is_image: bool = False):
     try:
-        prompt = f"""Analyze the following {'image' if is_image else 'character name'} and attempt to provide character details for a character. DO NOT HALLUCINATE FAKE PEOPLE/CHARACTERS. ONLY GO OFF INFORMATION YOU ACTUALLY KNOW IS TRUE. IF THE PERSON/CHARACTER ISN'T REAL, OR KNOWN FROM A REAL PEICE OF MEDIA, RETURN null."""
+        prompt = f"""Analyze the following {'image' if is_image else 'character name'} and attempt to provide character details for a character. DO NOT HALLUCINATE FAKE PEOPLE/CHARACTERS. ONLY GO OFF INFORMATION YOU ACTUALLY KNOW IS TRUE. IF THE PERSON/CHARACTER ISN'T REAL, OR KNOWN FROM A REAL PEICE OF MEDIA, RETURN null.
+
+Expected response format:
+{{
+    "name": "Character's name",
+    "age": "integer value representing age",
+    "personality": array of strings, 1 word plus an emoji ie ["smart 🤓", "creative 🎨", "kind 🤗"],
+    "occupation": "Character's job or role with an emoji after (return one job, the one they are best known for)",
+    "gender": "Character's gender"
+}}
+"""
 
         if is_image:
             image = Image.open(BytesIO(prompt_input))
@@ -182,28 +210,11 @@ async def generate_character_details_generic(prompt_input: Union[str, bytes], is
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/generate-story-segment")
-async def generate_story_segment(segment: StorySegment):
+async def generate_story_segment(story_input: StoryInput):
     try:
-        characters_info = "\n".join([f"- {char.name}: {char.role}" for char in segment.characters])
-        plot_summary = "\n".join(segment.plot_summary) if segment.plot_summary else "Story beginning"
-        
-        # Structured prompt to encourage valid JSON response
-        prompt = f"""Generate a story segment in valid JSON format with the following structure:
-{{
-    "text": "2-3 paragraphs of story text",
-    "setting_description": "detailed scene description without people",
-    "choices": ["choice 1", "choice 2", "choice 3"],
-    "plot_points": ["key event 1", "key event 2", "key event 3"]
-}}
-
-Context:
-Characters: {characters_info}
-Previous events: {plot_summary}
-Last action: {segment.last_action if segment.last_action else 'Story start'}"""
-
         response = gemini.models.generate_content(
             model=GEMINI_MODEL,
-            contents=prompt,
+            contents=story_input.prompt,
             config={
                 "response_mime_type": "application/json",
                 "response_schema": StoryResponse,
@@ -229,14 +240,13 @@ Last action: {segment.last_action if segment.last_action else 'Story start'}"""
             print(f"Error parsing response: {str(e)}")
             return {"response": None}
 
-        
-        # Check if we have a cached image for this setting description
-        if story_data.setting_description:
-            image_url = get_image_from_cache(story_data.setting_description)
+        # Only attempt to generate and cache images if we have a valid setting description
+        if story_data.story_state.new_location:
+            image_url = get_image_from_cache(story_data.story_state.location_description)
             
             if not image_url:
                 # Generate new image if not in cache
-                image_prompt = f"Generate a polaroid style image of this setting: {story_data.setting_description}. The scene should be empty with no people present."
+                image_prompt = f"Generate a polaroid style image: {story_data.story_state.location_description}. The scene should be empty with no people present."
                 try:
                     image_response = imagen.models.generate_images(
                         model=IMAGEN_MODEL, 
@@ -248,21 +258,26 @@ Last action: {segment.last_action if segment.last_action else 'Story start'}"""
                     )
                     try:
                         image_response = image_response.generated_images[0]
-                        # print(image_response)
-                        if(image_response.image.image_bytes is  None or image_response.rai_filtered_reason is not None  ):
+                        if(image_response.image.image_bytes is None or image_response.rai_filtered_reason is not None):
                             print("Error: Image bytes are None or image filtered")
-                            return {"response": None}
-                        # Save to Google Cloud Storage and get URL
-                        image_url = save_image_to_cache(story_data.setting_description, image_response.image.image_bytes)
+                            story_data.story_images = [] 
+                        else:
+                            # Save to Google Cloud Storage and get URL
+                            image_url = save_image_to_cache(story_data.story_state.location_description, image_response.image.image_bytes)
+                            print(f"Image saved to GCS: {image_url}")
+                            story_data.story_images = [StoryImage(url=image_url, description=story_data.story_state.location_description)]
                     except Exception as e:
                         print(f"Error creating or saving image to GCS: {str(e)}")
-                        return {"response": None}
+                        print(f"Image response: {image_response}")
+                        story_data.story_images = [] 
                 except Exception as e:
                     print(f"Error generating image: {str(e)}")
-                    print("test")
-                    return {"response": None}
-            
-            story_data.setting_image_url = image_url
+                    story_data.story_images = [] 
+            else:
+                print(f"Image found in GCS: {image_url}")
+                story_data.story_images = [StoryImage(url=image_url, description=story_data.story_state.location_description)]
+        else:
+            story_data.story_images = [] 
         
         return {"response": story_data}
     except Exception as e:

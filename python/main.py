@@ -295,5 +295,15 @@ async def generate_character_details_image(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Invalid image format")
     return await generate_character_details_generic(contents, is_image=True)
 
+# Add these imports
+import logging
+from fastapi.responses import JSONResponse
+
+
+@app.get("/")
+async def root():
+    return {"Hello": "World"}
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)

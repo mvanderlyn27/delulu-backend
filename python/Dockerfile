@@ -7,6 +7,10 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-EXPOSE 8000
+# Cloud Run will set PORT environment variable
+ENV PORT=8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Remove debugging tools for production
+EXPOSE ${PORT}
+
+CMD ["python", "main.py"]

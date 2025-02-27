@@ -4,7 +4,7 @@ const cors = require('cors');
 const multer = require('multer');
 const sharp = require('sharp');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { Storage } = require('@google-cloud/storage');
+const { Storage } = require('./node_modules/@google-cloud/storage/build/cjs/src');
 const crypto = require('crypto');
 
 // Initialize Express app

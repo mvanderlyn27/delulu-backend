@@ -230,6 +230,32 @@ app.post('/generate-character-details-image', upload.single('file'), async (req,
   }
 });
 
+// Health check endpoint
+app.get('/health', async (req, res) => {
+  try {
+    // Check Gemini API connectivity
+    await geminiModel.generateContent('test');
+    
+    // Check Google Cloud Storage connectivity
+    await bucket.exists();
+
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      services: {
+        gemini: 'connected',
+        storage: 'connected'
+      }
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'unhealthy',
+      timestamp: new Date().toISOString(),
+      error: error.message
+    });
+  }
+});
+
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

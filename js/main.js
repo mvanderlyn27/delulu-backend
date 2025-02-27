@@ -1,16 +1,27 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const multer = require('multer');
-const sharp = require('sharp');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { Storage } = require('./node_modules/@google-cloud/storage/build/cjs/src');
-const crypto = require('crypto');
+import { GoogleGenerativeAI, } from "@google/generative-ai";
+import { CharacterResponseSchema, StoryResponseSchema } from "./schema.js";
+import dotenv from 'dotenv';
+import express from 'express';
+import cors from 'cors';
+import multer from 'multer';
+import sharp from 'sharp';
+import { Storage } from '@google-cloud/storage';
+import crypto from 'crypto';
+
+// Initialize dotenv
+dotenv.config();
 
 // Initialize Express app
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Add headers for long-running requests
+app.use((req, res, next) => {
+  res.header('Connection', 'keep-alive');
+  res.header('Keep-Alive', 'timeout=120');
+  next();
+});
 
 // Initialize Gemini client
 const GEMINI_MODEL = process.env.GEMINI_MODEL;
@@ -19,7 +30,6 @@ const FREE_MODE = process.env.FREE_MODE === 'true';
 const API_KEY = FREE_MODE ? process.env.FREE_API_KEY : process.env.PAID_API_KEY;
 
 const genAI = new GoogleGenerativeAI(API_KEY);
-const geminiModel = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 const imagenModel = genAI.getGenerativeModel({ model: IMAGEN_MODEL });
 
 // Initialize Google Cloud Storage
@@ -110,55 +120,106 @@ Expected response format:
     "age": "integer value representing age",
     "personality": array of strings, 1 word plus an emoji ie ["smart 🤓", "creative 🎨", "kind 🤗"],
     "occupation": "Character's job or role with an emoji after (return one job, the one they are best known for)",
-    "gender": "Character's gender"
+    "gender": "Male, Female, or Non Binary"
 }`;
 
   try {
-    const result = await geminiModel.generateContent([
-      prompt,
-      ...(isImage ? [{ inlineData: { data: input.toString('base64'), mimeType: 'image/jpeg' } }] : []),
-      isImage ? '' : `Character Name: ${input}`
-    ]);
+    console.log(`Generating character details for ${isImage ? 'image' : 'name'}: ${isImage ? 'Image Data' : input}`);
+    const geminiModel = genAI.getGenerativeModel({ 
+      model: GEMINI_MODEL,
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: CharacterResponseSchema
+      }
+    });
 
-    const response = result.response;
-    if (!response || !response.text) {
+    // Modify how we pass the content to generateContent
+    const parts = [];
+    parts.push({ text: prompt });
+    
+    if (isImage) {
+      parts.push({
+        inlineData: {
+          mimeType: 'image/jpeg',
+          data: input.toString('base64')
+        }
+      });
+    } else {
+      parts.push({ text: `Character Name: ${input}` });
+    }
+
+    const result = await geminiModel.generateContent(parts);
+    console.log('result', result);
+    const response = result.response.text();
+    if (!response) {
+      console.error('Error: Empty or invalid response from Gemini API');
       return { response: null };
     }
 
     try {
-      const characterData = JSON.parse(response.text);
+      console.log('text', response);
+      const characterData = JSON.parse(response);
+      console.log('Successfully generated character details:', characterData);
       return { response: characterData };
-    } catch {
+    } catch (parseError) {
+      console.error('Error parsing character data:', parseError);
       return { response: null };
     }
   } catch (error) {
+    console.error('Error in character generation:', error);
     throw new Error(`Character generation failed: ${error.message}`);
   }
 }
 
 // API Routes
 app.post('/generate-story-segment', async (req, res) => {
-  try {
-    const { prompt } = req.body;
-    const result = await geminiModel.generateContent(prompt);
+  // Set a longer timeout for the response
+  res.setTimeout(120000); // 2 minute timeout
 
-    if (!result.response || !result.response.text) {
+  try {
+    console.log('Received story segment generation request');
+    const { prompt } = req.body;
+    const geminiModel = genAI.getGenerativeModel({ 
+      model: GEMINI_MODEL,
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: StoryResponseSchema,
+      }
+    });
+
+    // Add a timeout promise
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Request timeout')), 90000);
+    });
+
+    // Race between the actual request and timeout
+    const result = await Promise.race([
+      geminiModel.generateContent(prompt),
+      timeoutPromise
+    ]);
+
+    const response = result.response.text();
+    if (!response) {
       console.error('Error: Received null response from Gemini API');
       return res.json({ response: null });
     }
 
-    let storyData;
+    console.log('response', response);
+    let storyData = response;
     try {
-      storyData = JSON.parse(result.response.text);
+      // storyData = JSON.parse(response);
+      console.log('Successfully parsed story data');
     } catch (error) {
-      console.error('Error parsing response:', error);
+      console.error('Error parsing story response:', error);
       return res.json({ response: null });
     }
 
     if (storyData.story_state.new_location) {
+      console.log('New location detected, checking image cache');
       let imageUrl = await getImageFromCache(storyData.story_state.location_description);
 
       if (!imageUrl) {
+        console.log('Image not found in cache, generating new image');
         const imagePrompt = `Generate a polaroid style image: ${storyData.story_state.location_description}. The scene should be empty with no people present.`;
         try {
           const imageResult = await imagenModel.generateImage({
@@ -177,11 +238,11 @@ app.post('/generate-story-segment', async (req, res) => {
               description: storyData.story_state.location_description
             }];
           } else {
-            console.error('Error: Image generation failed');
+            console.error('Error: Image generation failed - no image data received');
             storyData.story_images = [];
           }
         } catch (error) {
-          console.error('Error generating image:', error);
+          console.error('Error generating or saving image:', error);
           storyData.story_images = [];
         }
       } else {
